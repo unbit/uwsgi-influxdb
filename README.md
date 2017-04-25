@@ -42,6 +42,8 @@ http-socket = :9090
 enable-metrics = true
 
 plugin = influxdb
-stats-push = influxdb:http://myuser:12345@localhost:8086/write?db=uwsgi,region=us-west,direction=in
+stats-push =influxdb:http://host:8086/write?db=dbname&u=user&p=pass&host=host1
 ```
 
+
+>>>>>>> cffed6f...  fix format values
