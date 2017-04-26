@@ -37,12 +37,13 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 	// reset the buffer
 	ub->pos = 0;
 
-	if (uwsgi_buffer_append(ub, metric_name, metric_len)) goto error;
+    if (uwsgi_buffer_append(ub, "uwsgi ", 6)) goto error;
     if (strlen(args->tags)) {
         if (uwsgi_buffer_append(ub, ",", 1)) goto error;
         if (uwsgi_buffer_append(ub, args->tags, strlen(args->tags))) goto error;
     }
-	if (uwsgi_buffer_append(ub, " value=", 7)) goto error;
+	if (uwsgi_buffer_append(ub, metric_name, metric_len)) goto error;
+    if (uwsgi_buffer_append(ub, "=", 1)) goto error;
     if (uwsgi_buffer_num64(ub, value)) goto error;
 	if (uwsgi_buffer_append(ub, " ", 1)) goto error;
 
