@@ -27,5 +27,9 @@ http-socket = :9090
 enable-metrics = true
 
 plugin = influxdb
-stats-push = influxdb:http://localhost:8086/db/uwsgi/series?u=root&p=root
+stats-push =influxdb:http://host:8086/write?db=dbname&u=user&p=pass,tag=tag1
+
 ```
+
+
+![img](http://i.imgur.com/QGa8iYC.png)
