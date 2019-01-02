@@ -33,9 +33,7 @@ Example request body:
 'cpu_load_short,direction=in,host=server01,region=us-west value=2.0 1422568543702900257'
 
 */
-static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value, CURL *curl) {
-	// reset the buffer
-	ub->pos = 0;
+static void influxdb_write_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value) {
 
 	if (uwsgi_buffer_append(ub, "uwsgi ",5)) goto error;
     if (strlen(args->tags)) {
@@ -50,17 +48,36 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 
         unsigned long now = (unsigned long) time(NULL);
 	char buf[20 + 1]; // 20 for unsigned long, 1 for \0
-	snprintf(buf, 21, "%llu000000000\0", now);  // convert to nanoseconds and string
-	if (uwsgi_buffer_append(ub, buf, 21)) goto error;
+	snprintf(buf, 21, "%llu000000000\n", now);  // convert to nanoseconds and string
+	if (uwsgi_buffer_append(ub, buf, 20)) goto error;
 
-	curl_easy_setopt(curl, CURLOPT_URL, args->url);
+	return;
+error:
+	uwsgi_log_verbose("[influxdb] unable to generate body for %.*s\n", metric_len, metric_name);
+}
+
+
+static void influxdb_send_metrics(struct uwsgi_buffer *ub, const char *url) {
+	CURL *curl = curl_easy_init();
+	if (!curl) {
+		uwsgi_log_verbose("[influxdb] unable to initialize curl for metrics");
+		return;
+	}
+
+	if (uwsgi_buffer_byte(ub, '\0')) {
+		curl_easy_cleanup(curl);
+		return;
+	}
+
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, uwsgi.socket_timeout);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, uwsgi.socket_timeout);
+	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ub->buf);
 
-	// now send the body to the influxdb server via curl
 	CURLcode res = curl_easy_perform(curl);
 	if (res != CURLE_OK) {
-		uwsgi_log_verbose("[influxdb] error sending metric %.*s: %s\n", metric_len, metric_name, curl_easy_strerror(res));
+		uwsgi_log_verbose("[influxdb] error sending metrics: %s\n", curl_easy_strerror(res));
 		return;
 	}
 	long http_code = 0;
@@ -70,23 +87,8 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 	curl_easy_getinfo(curl, CURLINFO_HTTP_CODE, &http_code);
 #endif
 	if (http_code != 204) {
-		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code for %.*s: %d\n", metric_len, metric_name, (int) http_code);
+		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code: %d\n", (int) http_code);
 	}
-	return;
-error:
-	uwsgi_log_verbose("[influxdb] unable to generate body for %.*s\n", metric_len, metric_name);
-}
-
-
-static CURL *create_curl_handle() {
-	CURL *curl = curl_easy_init();
-	if (!curl) {
-		uwsgi_log_verbose("[influxdb] unable to initialize curl for metrics");
-		return NULL;
-	}
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, uwsgi.socket_timeout);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, uwsgi.socket_timeout);
-	return curl;
 }
 
 /*
@@ -140,15 +142,12 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 	struct uspi_args *args = malloc(sizeof(struct uspi_args));
 	parse_uspi_arg(uspi->arg, args);
 
-        CURL *curl = create_curl_handle();
 	while(um) {
 		uwsgi_rlock(uwsgi.metrics_lock);
 		int64_t value = *um->value;
 		uwsgi_rwunlock(uwsgi.metrics_lock);
 
-		if (curl) {
-			influxdb_send_metric(ub, args, um->name, um->name_len, value, curl);
-		}
+		influxdb_write_metric(ub, args, um->name, um->name_len, value);
 
 		if (um->reset_after_push){
 			uwsgi_wlock(uwsgi.metrics_lock);
@@ -159,9 +158,7 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 		um = um->next;
 	}
 
-	if (curl) {
-		curl_easy_cleanup(curl);
-	}
+	influxdb_send_metrics(ub, args->url);
 
 	free_uspi_args(args);
 
