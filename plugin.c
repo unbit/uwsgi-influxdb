@@ -33,7 +33,7 @@ Example request body:
 'cpu_load_short,direction=in,host=server01,region=us-west value=2.0 1422568543702900257'
 
 */
-static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value) {
+static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value, CURL *curl) {
 	// reset the buffer
 	ub->pos = 0;
 
@@ -53,26 +53,14 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 	snprintf(buf, 21, "%llu000000000\0", now);  // convert to nanoseconds and string
 	if (uwsgi_buffer_append(ub, buf, 21)) goto error;
 
-	// now send the body to the influxdb server via curl
-	CURL *curl = curl_easy_init();
-	if (!curl) {
-		uwsgi_log_verbose("[influxdb] unable to initialize curl for metric %.*s\n", metric_len, metric_name);
-		return;
-	}
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, uwsgi.socket_timeout);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, uwsgi.socket_timeout);
 	curl_easy_setopt(curl, CURLOPT_URL, args->url);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ub->buf);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
+	// now send the body to the influxdb server via curl
 	CURLcode res = curl_easy_perform(curl);
 	if (res != CURLE_OK) {
 		uwsgi_log_verbose("[influxdb] error sending metric %.*s: %s\n", metric_len, metric_name, curl_easy_strerror(res));
-		curl_easy_cleanup(curl);
 		return;
 	}
 	long http_code = 0;
@@ -84,12 +72,22 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 	if (http_code != 204) {
 		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code for %.*s: %d\n", metric_len, metric_name, (int) http_code);
 	}
-	curl_easy_cleanup(curl);
 	return;
 error:
 	uwsgi_log_verbose("[influxdb] unable to generate body for %.*s\n", metric_len, metric_name);
 }
 
+
+static CURL *create_curl_handle() {
+	CURL *curl = curl_easy_init();
+	if (!curl) {
+		uwsgi_log_verbose("[influxdb] unable to initialize curl for metrics");
+		return NULL;
+	}
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, uwsgi.socket_timeout);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, uwsgi.socket_timeout);
+	return curl;
+}
 
 /*
 
@@ -142,12 +140,15 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 	struct uspi_args *args = malloc(sizeof(struct uspi_args));
 	parse_uspi_arg(uspi->arg, args);
 
+        CURL *curl = create_curl_handle();
 	while(um) {
 		uwsgi_rlock(uwsgi.metrics_lock);
 		int64_t value = *um->value;
 		uwsgi_rwunlock(uwsgi.metrics_lock);
 
-        influxdb_send_metric(ub, args, um->name, um->name_len, value);
+		if (curl) {
+			influxdb_send_metric(ub, args, um->name, um->name_len, value, curl);
+		}
 
 		if (um->reset_after_push){
 			uwsgi_wlock(uwsgi.metrics_lock);
@@ -156,6 +157,10 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 		}
 
 		um = um->next;
+	}
+
+	if (curl) {
+		curl_easy_cleanup(curl);
 	}
 
 	free_uspi_args(args);
