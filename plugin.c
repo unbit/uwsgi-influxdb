@@ -33,45 +33,51 @@ Example request body:
 'cpu_load_short,direction=in,host=server01,region=us-west value=2.0 1422568543702900257'
 
 */
-static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value) {
-	// reset the buffer
-	ub->pos = 0;
+static void influxdb_write_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value) {
 
-    if (uwsgi_buffer_append(ub, "uwsgi ", 6)) goto error;
-    if (strlen(args->tags)) {
-        if (uwsgi_buffer_append(ub, ",", 1)) goto error;
-        if (uwsgi_buffer_append(ub, args->tags, strlen(args->tags))) goto error;
-    }
+	if (uwsgi_buffer_append(ub, "uwsgi ",5)) goto error;
+	if (strlen(args->tags)) {
+		if (uwsgi_buffer_append(ub, ",", 1)) goto error;
+		if (uwsgi_buffer_append(ub, args->tags, strlen(args->tags))) goto error;
+		if (uwsgi_buffer_append(ub, " ", 1)) goto error;
+	}
 	if (uwsgi_buffer_append(ub, metric_name, metric_len)) goto error;
-    if (uwsgi_buffer_append(ub, "=", 1)) goto error;
-    if (uwsgi_buffer_num64(ub, value)) goto error;
+	if (uwsgi_buffer_append(ub, "=", 1)) goto error;
+	if (uwsgi_buffer_num64(ub, value)) goto error;
 	if (uwsgi_buffer_append(ub, " ", 1)) goto error;
 
         unsigned long now = (unsigned long) time(NULL);
 	char buf[20 + 1]; // 20 for unsigned long, 1 for \0
-	snprintf(buf, 21, "%llu000000000\0", now);  // convert to nanoseconds and string
-	if (uwsgi_buffer_append(ub, buf, 21)) goto error;
+	snprintf(buf, 21, "%llu000000000\n", now);  // convert to nanoseconds and string
+	if (uwsgi_buffer_append(ub, buf, 20)) goto error;
 
-	// now send the body to the influxdb server via curl
+	return;
+error:
+	uwsgi_log_verbose("[influxdb] unable to generate body for %.*s\n", metric_len, metric_name);
+}
+
+
+static void influxdb_send_metrics(struct uwsgi_buffer *ub, const char *url) {
 	CURL *curl = curl_easy_init();
 	if (!curl) {
-		uwsgi_log_verbose("[influxdb] unable to initialize curl for metric %.*s\n", metric_len, metric_name);
+		uwsgi_log_verbose("[influxdb] unable to initialize curl for metrics");
 		return;
 	}
+
+	if (uwsgi_buffer_byte(ub, '\0')) {
+		curl_easy_cleanup(curl);
+		return;
+	}
+
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, uwsgi.socket_timeout);
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, uwsgi.socket_timeout);
-	curl_easy_setopt(curl, CURLOPT_URL, args->url);
+	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ub->buf);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-
-	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
 	CURLcode res = curl_easy_perform(curl);
 	if (res != CURLE_OK) {
-		uwsgi_log_verbose("[influxdb] error sending metric %.*s: %s\n", metric_len, metric_name, curl_easy_strerror(res));
-		curl_easy_cleanup(curl);
+		uwsgi_log_verbose("[influxdb] error sending metrics: %s\n", curl_easy_strerror(res));
 		return;
 	}
 	long http_code = 0;
@@ -81,14 +87,10 @@ static void influxdb_send_metric(struct uwsgi_buffer *ub, struct uspi_args *args
 	curl_easy_getinfo(curl, CURLINFO_HTTP_CODE, &http_code);
 #endif
 	if (http_code != 204) {
-		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code for %.*s: %d\n", metric_len, metric_name, (int) http_code);
+		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code: %d\n", (int) http_code);
 	}
 	curl_easy_cleanup(curl);
-	return;
-error:
-	uwsgi_log_verbose("[influxdb] unable to generate body for %.*s\n", metric_len, metric_name);
 }
-
 
 /*
 
@@ -146,7 +148,7 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 		int64_t value = *um->value;
 		uwsgi_rwunlock(uwsgi.metrics_lock);
 
-        influxdb_send_metric(ub, args, um->name, um->name_len, value);
+		influxdb_write_metric(ub, args, um->name, um->name_len, value);
 
 		if (um->reset_after_push){
 			uwsgi_wlock(uwsgi.metrics_lock);
@@ -156,6 +158,8 @@ static void stats_pusher_influxdb(struct uwsgi_stats_pusher_instance *uspi, time
 
 		um = um->next;
 	}
+
+	influxdb_send_metrics(ub, args->url);
 
 	free_uspi_args(args);
 
