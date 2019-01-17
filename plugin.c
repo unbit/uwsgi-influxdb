@@ -36,14 +36,14 @@ Example request body:
 static void influxdb_write_metric(struct uwsgi_buffer *ub, struct uspi_args *args, char *metric_name, size_t metric_len, int64_t value) {
 
 	if (uwsgi_buffer_append(ub, "uwsgi ",5)) goto error;
-    if (strlen(args->tags)) {
-        if (uwsgi_buffer_append(ub, ",", 1)) goto error;
-        if (uwsgi_buffer_append(ub, args->tags, strlen(args->tags))) goto error;
-	if (uwsgi_buffer_append(ub, " ", 1)) goto error;
-    }
+	if (strlen(args->tags)) {
+		if (uwsgi_buffer_append(ub, ",", 1)) goto error;
+		if (uwsgi_buffer_append(ub, args->tags, strlen(args->tags))) goto error;
+		if (uwsgi_buffer_append(ub, " ", 1)) goto error;
+	}
 	if (uwsgi_buffer_append(ub, metric_name, metric_len)) goto error;
-    if (uwsgi_buffer_append(ub, "=", 1)) goto error;
-    if (uwsgi_buffer_num64(ub, value)) goto error;
+	if (uwsgi_buffer_append(ub, "=", 1)) goto error;
+	if (uwsgi_buffer_num64(ub, value)) goto error;
 	if (uwsgi_buffer_append(ub, " ", 1)) goto error;
 
         unsigned long now = (unsigned long) time(NULL);
@@ -89,6 +89,7 @@ static void influxdb_send_metrics(struct uwsgi_buffer *ub, const char *url) {
 	if (http_code != 204) {
 		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code: %d\n", (int) http_code);
 	}
+  curl_easy_cleanup(curl);
 }
 
 /*
