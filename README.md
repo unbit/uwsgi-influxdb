@@ -46,5 +46,3 @@ stats-push =influxdb:http://host:8086/write?db=dbname&u=user&p=pass,tag=tag1
 
 ```
 
-
->>>>>>> cffed6f...  fix format values

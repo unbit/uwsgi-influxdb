@@ -1,2 +1,3 @@
 *.so
+.plugin.c.swp
 .uwsgi_plugins_builder/
