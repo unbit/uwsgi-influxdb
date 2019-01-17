@@ -89,7 +89,7 @@ static void influxdb_send_metrics(struct uwsgi_buffer *ub, const char *url) {
 	if (http_code != 204) {
 		uwsgi_log_verbose("[influxdb] HTTP api returned non-200 response code: %d\n", (int) http_code);
 	}
-  curl_easy_cleanup(curl);
+	curl_easy_cleanup(curl);
 }
 
 /*
